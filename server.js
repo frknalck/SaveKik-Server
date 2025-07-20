@@ -101,23 +101,19 @@ app.post('/convert', async (req, res) => {
     }
     
     try {
-        // Create FFmpeg command
+        // Create FFmpeg command  
         let command = ffmpeg(m3u8_url)
             .inputOptions([
                 '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
-                '-user_agent', 'SaveKik/1.0 (iOS; Mobile)',
-                '-headers', 'Referer: https://kick.com/',
+                '-user_agent', 'SaveKik/1.0',
                 '-reconnect', '1',
                 '-reconnect_streamed', '1',
                 '-reconnect_delay_max', '5'
             ])
             .outputOptions([
-                '-c:v', 'libx264',
-                '-c:a', 'aac',
-                '-preset', 'medium', 
-                '-crf', '23',
-                '-movflags', '+faststart',
-                '-avoid_negative_ts', 'make_zero'
+                '-c', 'copy',
+                '-bsf:a', 'aac_adtstoasc',
+                '-movflags', '+faststart'
             ]);
 
         // Add segment selection if provided

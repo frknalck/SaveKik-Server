@@ -161,7 +161,7 @@ app.post('/convert', async (req, res) => {
                 jobProgress.set(jobId, {
                     status: 'processing',
                     progress: 5,
-                    message: 'FFmpeg started, downloading segments...'
+                    message: 'Conversion started, downloading segments...'
                 });
             })
             .on('progress', (progress) => {

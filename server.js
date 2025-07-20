@@ -18,22 +18,6 @@ app.use('/downloads', express.static('downloads'));
 // Create downloads directory
 fs.ensureDirSync('./downloads');
 
-// Get CRF value based on quality selection
-function getCRFValue(quality) {
-    // CRF: 0-51, lower = better quality, larger file size
-    // 18-28 is considered reasonable range
-    switch(quality) {
-        case 'high':
-            return '20';    // High quality, larger file
-        case 'medium':
-            return '23';    // Balanced quality/size (default)
-        case 'low':
-            return '28';    // Lower quality, smaller file
-        default:
-            return '23';    // Default to medium
-    }
-}
-
 // Check FFmpeg availability
 function checkFFmpeg() {
     return new Promise((resolve) => {
@@ -148,13 +132,9 @@ app.post('/convert', async (req, res) => {
                 '-reconnect_delay_max', '5'
             ])
             .outputOptions([
-                '-c:v', 'libx264',      // Use H.264 codec for better compression
-                '-preset', 'fast',       // Fast encoding with good compression
-                '-crf', getCRFValue(quality), // Dynamic CRF based on quality
-                '-c:a', 'aac',          // AAC audio codec
-                '-b:a', '128k',         // Audio bitrate 128kbps
-                '-movflags', '+faststart', // Web optimization
-                '-max_muxing_queue_size', '9999'
+                '-c', 'copy',           // Copy streams without re-encoding (FAST!)
+                '-bsf:a', 'aac_adtstoasc', // Fix AAC stream
+                '-movflags', '+faststart'  // Web optimization
             ]);
 
         // Add segment selection if provided

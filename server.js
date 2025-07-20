@@ -72,6 +72,20 @@ app.get('/', (req, res) => {
     });
 });
 
+// Job status storage
+const jobProgress = new Map();
+
+// Get job progress endpoint
+app.get('/progress/:jobId', (req, res) => {
+    const jobId = req.params.jobId;
+    const progress = jobProgress.get(jobId) || { 
+        status: 'not_found', 
+        progress: 0, 
+        message: 'Job not found' 
+    };
+    res.json(progress);
+});
+
 // M3U8 to MP4 conversion endpoint
 app.post('/convert', async (req, res) => {
     const { m3u8_url, filename, start_time, end_time } = req.body;
@@ -90,6 +104,13 @@ app.post('/convert', async (req, res) => {
     console.log(`🚀 Starting FFmpeg conversion: ${jobId}`);
     console.log(`📂 Input M3U8: ${m3u8_url}`);
     console.log(`📁 Output: ${outputFilename}`);
+    
+    // Initialize job progress
+    jobProgress.set(jobId, {
+        status: 'starting',
+        progress: 0,
+        message: 'Starting conversion...'
+    });
     
     // Check if FFmpeg is available
     if (!ffmpegAvailable) {
@@ -125,14 +146,33 @@ app.post('/convert', async (req, res) => {
             console.log(`✂️ Segment: ${start_time}s - ${end_time}s (duration: ${duration}s)`);
         }
 
+        // Return job ID immediately for client to start polling
+        res.json({
+            success: true,
+            job_id: jobId,
+            message: 'Conversion started, use job_id to check progress'
+        });
+
         // Set output and start conversion
         command
             .output(outputPath)
             .on('start', (commandLine) => {
                 console.log('📼 FFmpeg command:', commandLine);
+                jobProgress.set(jobId, {
+                    status: 'processing',
+                    progress: 5,
+                    message: 'FFmpeg started, downloading segments...'
+                });
             })
             .on('progress', (progress) => {
-                console.log(`⏳ Progress: ${Math.round(progress.percent || 0)}%`);
+                const percent = Math.round(progress.percent || 0);
+                console.log(`⏳ Progress: ${percent}%`);
+                
+                jobProgress.set(jobId, {
+                    status: 'processing',
+                    progress: Math.max(10, percent), // Start from 10%
+                    message: `Converting video... ${percent}%`
+                });
             })
             .on('end', () => {
                 console.log(`✅ Conversion completed: ${outputFilename}`);
@@ -144,40 +184,54 @@ app.post('/convert', async (req, res) => {
                     
                     if (stats.size > 0) {
                         const downloadUrl = `${req.protocol}://${req.get('host')}/downloads/${outputFilename}`;
-                        res.json({
-                            success: true,
-                            job_id: jobId,
+                        
+                        jobProgress.set(jobId, {
+                            status: 'completed',
+                            progress: 100,
+                            message: 'Conversion completed successfully',
                             download_url: downloadUrl,
                             filename: outputFilename,
                             size: stats.size
                         });
+                        
+                        // Clean up progress after 10 minutes
+                        setTimeout(() => {
+                            jobProgress.delete(jobId);
+                        }, 10 * 60 * 1000);
+                        
                     } else {
                         console.log('❌ Output file is empty');
-                        res.status(500).json({
-                            error: 'Conversion produced empty file'
+                        jobProgress.set(jobId, {
+                            status: 'error',
+                            progress: 0,
+                            message: 'Conversion produced empty file'
                         });
                     }
                 } else {
                     console.log('❌ Output file was not created');
-                    res.status(500).json({
-                        error: 'Conversion failed - no output file'
+                    jobProgress.set(jobId, {
+                        status: 'error',
+                        progress: 0,
+                        message: 'Conversion failed - no output file'
                     });
                 }
             })
             .on('error', (err) => {
                 console.log(`❌ FFmpeg error: ${err.message}`);
-                res.status(500).json({
-                    error: 'Conversion failed',
-                    details: err.message
+                jobProgress.set(jobId, {
+                    status: 'error',
+                    progress: 0,
+                    message: `Conversion failed: ${err.message}`
                 });
             })
             .run();
 
     } catch (error) {
         console.log(`❌ Server error: ${error.message}`);
-        res.status(500).json({
-            error: 'Server error',
-            details: error.message
+        jobProgress.set(jobId, {
+            status: 'error',
+            progress: 0,
+            message: `Server error: ${error.message}`
         });
     }
 });

@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs-extra');
 const path = require('path');
+const { exec } = require('child_process');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -17,13 +18,45 @@ app.use('/downloads', express.static('downloads'));
 // Create downloads directory
 fs.ensureDirSync('./downloads');
 
+// Check FFmpeg availability
+function checkFFmpeg() {
+    return new Promise((resolve) => {
+        exec('ffmpeg -version', (error) => {
+            if (error) {
+                console.log('❌ FFmpeg not found, trying alternative paths...');
+                exec('which ffmpeg', (error2, stdout) => {
+                    if (error2) {
+                        console.log('❌ FFmpeg not available on system');
+                        resolve(false);
+                    } else {
+                        console.log(`✅ FFmpeg found at: ${stdout.trim()}`);
+                        ffmpeg.setFfmpegPath(stdout.trim());
+                        resolve(true);
+                    }
+                });
+            } else {
+                console.log('✅ FFmpeg is available');
+                resolve(true);
+            }
+        });
+    });
+}
+
+// Initialize FFmpeg check on startup
+let ffmpegAvailable = false;
+checkFFmpeg().then(available => {
+    ffmpegAvailable = available;
+    console.log(`🎬 FFmpeg status: ${available ? 'Ready' : 'Not available'}`);
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({ 
         status: 'OK', 
         message: 'SaveKik Converter Server is running',
         timestamp: new Date().toISOString(),
-        version: '1.0.0'
+        version: '1.0.0',
+        ffmpeg: ffmpegAvailable ? 'Available' : 'Not available'
     });
 });
 
@@ -57,6 +90,15 @@ app.post('/convert', async (req, res) => {
     console.log(`🚀 Starting FFmpeg conversion: ${jobId}`);
     console.log(`📂 Input M3U8: ${m3u8_url}`);
     console.log(`📁 Output: ${outputFilename}`);
+    
+    // Check if FFmpeg is available
+    if (!ffmpegAvailable) {
+        console.log('❌ FFmpeg not available on server');
+        return res.status(500).json({
+            error: 'FFmpeg not installed on server',
+            details: 'Server needs FFmpeg to convert videos'
+        });
+    }
     
     try {
         // Create FFmpeg command

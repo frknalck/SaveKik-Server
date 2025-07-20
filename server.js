@@ -18,6 +18,22 @@ app.use('/downloads', express.static('downloads'));
 // Create downloads directory
 fs.ensureDirSync('./downloads');
 
+// Get CRF value based on quality selection
+function getCRFValue(quality) {
+    // CRF: 0-51, lower = better quality, larger file size
+    // 18-28 is considered reasonable range
+    switch(quality) {
+        case 'high':
+            return '20';    // High quality, larger file
+        case 'medium':
+            return '23';    // Balanced quality/size (default)
+        case 'low':
+            return '28';    // Lower quality, smaller file
+        default:
+            return '23';    // Default to medium
+    }
+}
+
 // Check FFmpeg availability
 function checkFFmpeg() {
     return new Promise((resolve) => {
@@ -88,7 +104,7 @@ app.get('/progress/:jobId', (req, res) => {
 
 // M3U8 to MP4 conversion endpoint
 app.post('/convert', async (req, res) => {
-    const { m3u8_url, filename, start_time, end_time } = req.body;
+    const { m3u8_url, filename, start_time, end_time, quality } = req.body;
     
     if (!m3u8_url || !filename) {
         return res.status(400).json({
@@ -122,7 +138,7 @@ app.post('/convert', async (req, res) => {
     }
     
     try {
-        // Create FFmpeg command  
+        // Create FFmpeg command with optimization
         let command = ffmpeg(m3u8_url)
             .inputOptions([
                 '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
@@ -132,9 +148,13 @@ app.post('/convert', async (req, res) => {
                 '-reconnect_delay_max', '5'
             ])
             .outputOptions([
-                '-c', 'copy',
-                '-bsf:a', 'aac_adtstoasc',
-                '-movflags', '+faststart'
+                '-c:v', 'libx264',      // Use H.264 codec for better compression
+                '-preset', 'fast',       // Fast encoding with good compression
+                '-crf', getCRFValue(quality), // Dynamic CRF based on quality
+                '-c:a', 'aac',          // AAC audio codec
+                '-b:a', '128k',         // Audio bitrate 128kbps
+                '-movflags', '+faststart', // Web optimization
+                '-max_muxing_queue_size', '9999'
             ]);
 
         // Add segment selection if provided
@@ -244,6 +264,39 @@ app.post('/convert', async (req, res) => {
             message: `Server error: ${error.message}`
         });
     }
+});
+
+// Delete specific file endpoint
+app.delete('/downloads/:filename', (req, res) => {
+    const filename = req.params.filename;
+    const filePath = path.join('./downloads', filename);
+    
+    // Security: ensure filename doesn't contain path traversal
+    if (filename.includes('..') || filename.includes('/')) {
+        return res.status(400).json({
+            error: 'Invalid filename'
+        });
+    }
+    
+    fs.unlink(filePath, (err) => {
+        if (err) {
+            if (err.code === 'ENOENT') {
+                return res.status(404).json({
+                    error: 'File not found'
+                });
+            }
+            console.log(`❌ Error deleting file: ${err.message}`);
+            return res.status(500).json({
+                error: 'Failed to delete file'
+            });
+        }
+        
+        console.log(`🗑️ Deleted file: ${filename}`);
+        res.json({
+            success: true,
+            message: 'File deleted successfully'
+        });
+    });
 });
 
 // Cleanup old files (run every hour)

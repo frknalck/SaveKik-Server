@@ -168,10 +168,20 @@ app.post('/convert', async (req, res) => {
                 const percent = Math.round(progress.percent || 0);
                 console.log(`⏳ Progress: ${percent}%`);
                 
+                // Better progress mapping for copy operations
+                let mappedProgress = percent;
+                if (percent > 0 && percent < 10) {
+                    mappedProgress = 10 + (percent * 2); // 10-30% range
+                } else if (percent >= 10 && percent < 50) {
+                    mappedProgress = 30 + (percent - 10); // 30-70% range
+                } else if (percent >= 50) {
+                    mappedProgress = Math.min(90, 70 + (percent - 50) * 0.5); // 70-90% range
+                }
+                
                 jobProgress.set(jobId, {
                     status: 'processing',
-                    progress: Math.max(10, percent), // Start from 10%
-                    message: `Converting video... ${percent}%`
+                    progress: Math.max(10, mappedProgress),
+                    message: `Converting video... ${mappedProgress}%`
                 });
             })
             .on('end', () => {

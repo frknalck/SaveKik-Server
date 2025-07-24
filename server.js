@@ -67,13 +67,18 @@ app.get('/', (req, res) => {
         status: 'running',
         endpoints: {
             health: '/health',
-            convert: 'POST /convert'
+            convert: 'POST /convert',
+            progress: 'GET /progress/:jobId',
+            cancel: 'POST /cancel/:jobId',
+            delete: 'DELETE /downloads/:filename'
         }
     });
 });
 
 // Job status storage
 const jobProgress = new Map();
+// Active FFmpeg processes for cancellation
+const activeProcesses = new Map();
 
 // Get job progress endpoint
 app.get('/progress/:jobId', (req, res) => {
@@ -84,6 +89,69 @@ app.get('/progress/:jobId', (req, res) => {
         message: 'Job not found' 
     };
     res.json(progress);
+});
+
+// Cancel job endpoint
+app.post('/cancel/:jobId', (req, res) => {
+    const jobId = req.params.jobId;
+    
+    console.log(`🛑 Cancel request for job: ${jobId}`);
+    
+    // Check if job exists
+    const jobStatus = jobProgress.get(jobId);
+    if (!jobStatus) {
+        return res.status(404).json({
+            error: 'Job not found',
+            job_id: jobId
+        });
+    }
+    
+    // If job is already completed or errored, nothing to cancel
+    if (jobStatus.status === 'completed' || jobStatus.status === 'error' || jobStatus.status === 'cancelled') {
+        return res.json({
+            success: true,
+            message: `Job already ${jobStatus.status}`,
+            job_id: jobId
+        });
+    }
+    
+    // Cancel active FFmpeg process
+    const ffmpegCommand = activeProcesses.get(jobId);
+    if (ffmpegCommand) {
+        try {
+            ffmpegCommand.kill('SIGKILL');
+            console.log(`✅ Killed FFmpeg process for job: ${jobId}`);
+        } catch (error) {
+            console.log(`⚠️ Error killing process: ${error.message}`);
+        }
+        activeProcesses.delete(jobId);
+    }
+    
+    // Update job status
+    jobProgress.set(jobId, {
+        status: 'cancelled',
+        progress: 0,
+        message: 'Job cancelled by user'
+    });
+    
+    // Clean up any partial output file
+    const progress = jobProgress.get(jobId);
+    if (progress && progress.filename) {
+        const outputPath = path.join('./downloads', progress.filename);
+        fs.unlink(outputPath, (err) => {
+            if (!err) {
+                console.log(`🗑️ Cleaned up partial file: ${progress.filename}`);
+            }
+        });
+    }
+    
+    console.log(`✅ Job cancelled successfully: ${jobId}`);
+    
+    res.json({
+        success: true,
+        message: 'Job cancelled successfully',
+        job_id: jobId
+    });
 });
 
 // M3U8 to MP4 conversion endpoint
@@ -158,10 +226,13 @@ app.post('/convert', async (req, res) => {
             .output(outputPath)
             .on('start', (commandLine) => {
                 console.log('📼 FFmpeg command:', commandLine);
+                // Store the command for cancellation
+                activeProcesses.set(jobId, command);
                 jobProgress.set(jobId, {
                     status: 'processing',
                     progress: 5,
-                    message: 'Conversion started, downloading segments...'
+                    message: 'Conversion started, downloading segments...',
+                    filename: outputFilename
                 });
             })
             .on('progress', (progress) => {
@@ -186,6 +257,8 @@ app.post('/convert', async (req, res) => {
             })
             .on('end', () => {
                 console.log(`✅ Conversion completed: ${outputFilename}`);
+                // Remove from active processes
+                activeProcesses.delete(jobId);
                 
                 // Check if file exists and has content
                 if (fs.existsSync(outputPath)) {
@@ -228,6 +301,8 @@ app.post('/convert', async (req, res) => {
             })
             .on('error', (err) => {
                 console.log(`❌ FFmpeg error: ${err.message}`);
+                // Remove from active processes
+                activeProcesses.delete(jobId);
                 jobProgress.set(jobId, {
                     status: 'error',
                     progress: 0,
